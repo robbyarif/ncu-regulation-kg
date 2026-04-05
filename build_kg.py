@@ -1,87 +1,150 @@
-import sqlite3
-from neo4j import GraphDatabase
-import os
-from dotenv import load_dotenv
+﻿"""Minimal KG builder template for Assignment 4.
 
+Keep this contract unchanged:
+- Graph: (Regulation)-[:HAS_ARTICLE]->(Article)-[:CONTAINS_RULE]->(Rule)
+- Article: number, content, reg_name, category
+- Rule: rule_id, type, action, result, art_ref, reg_name
+- Fulltext indexes: article_content_idx, rule_idx
+- SQLite file: ncu_regulations.db
+"""
+
+import os
+import sqlite3
+from typing import Any
+
+from dotenv import load_dotenv
+from neo4j import GraphDatabase
+
+from llm_loader import load_local_llm, get_tokenizer, get_raw_pipeline
+
+
+# ========== 0) Initialization ==========
 load_dotenv()
 
 URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-AUTH = (os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "password"))
+AUTH = (
+    os.getenv("NEO4J_USER", "neo4j"),
+    os.getenv("NEO4J_PASSWORD", "password"),
+)
 
-def build_graph():
+
+def extract_entities(article_number: str, reg_name: str, content: str) -> dict[str, Any]:
+    """TODO(student, required): implement LLM extraction and return {"rules": [...]}"""
+    return {
+        "rules": []
+    }
+
+
+def build_fallback_rules(article_number: str, content: str) -> list[dict[str, str]]:
+    """TODO(student, optional): add deterministic fallback rules."""
+    return []
+
+
+# SQLite tables used:
+# - regulations(reg_id, name, category)
+# - articles(reg_id, article_number, content)
+
+
+def build_graph() -> None:
+    """Build KG from SQLite into Neo4j using the fixed assignment schema."""
     sql_conn = sqlite3.connect("ncu_regulations.db")
     cursor = sql_conn.cursor()
     driver = GraphDatabase.driver(URI, auth=AUTH)
 
-    print("🚀 Building Knowledge Graph (English)...")
+    # Optional: warm up local LLM
+    load_local_llm()
 
     with driver.session() as session:
+        # Fixed strategy: clear existing graph data before rebuilding.
         session.run("MATCH (n) DETACH DELETE n")
 
-        # ==========================================
-        # Step 1: Create Regulation Nodes
-        # ==========================================
+        # 1) Read regulations and create Regulation nodes.
         cursor.execute("SELECT reg_id, name, category FROM regulations")
-        regs = cursor.fetchall()
-        for r in regs:
-            reg_id, reg_name, reg_category = r
-            # [TODO: Student Task 1]
-            # Write a Cypher query to create a 'Regulation' node.
-            #
-            # Requirements:
-            # 1. Use `MERGE` to ensure we don't create duplicate nodes if run multiple times.
-            # 2. The node must have the label `Regulation`.
-            # 3. Match/Create by the `id` property (using the parameter $rid).
-            # 4. Set the `name` property to $name.
-            # 5. Set the `category` property to $cat.
-            #
-            # Hint:
-            # MERGE (n:Label {key: $param}) SET n.prop = $val
-            
-            cypher_regulation = """
-            
-            """
-            if cypher_regulation.strip():
-                session.run(cypher_regulation, rid=reg_id, name=reg_name, cat=reg_category)
+        regulations = cursor.fetchall()
+        reg_map: dict[int, tuple[str, str]] = {}
 
-        # ==========================================
-        # Step 2: Create Article Nodes & Relationships
-        # ==========================================
+        for reg_id, name, category in regulations:
+            reg_map[reg_id] = (name, category)
+            session.run(
+                "MERGE (r:Regulation {id:$rid}) SET r.name=$name, r.category=$cat",
+                rid=reg_id,
+                name=name,
+                cat=category,
+            )
+
+        # 2) Read articles and create Article + HAS_ARTICLE.
         cursor.execute("SELECT reg_id, article_number, content FROM articles")
-        arts = cursor.fetchall()
-        count = 0
-        for a in arts:
-            reg_id, art_num, content = a
-            
-            # [TODO: Student Task 2]
-            # Write a Cypher query to:
-            # 1. Find the parent Regulation node (using MATCH).
-            # 2. Create a new Article node (using CREATE).
-            # 3. Link them with a relationship (using MERGE).
-            #
-            # Requirements:
-            # A. MATCH the Regulation node `r` where `id` equals $rid.
-            # B. CREATE an Article node `a` with properties:
-            #    - `number`: $num
-            #    - `content`: $content
-            # C. Create a relationship `HAS_ARTICLE` from `r` to `a`.
-            #    - Pattern: (Regulation)-[:HAS_ARTICLE]->(Article)
-            #
-            # Hint:
-            # MATCH (p:Parent {id: $pid})
-            # CREATE (c:Child {prop: $val})
-            # MERGE (p)-[:REL_NAME]->(c)
+        articles = cursor.fetchall()
 
-            cypher_article = """
-            
+        for reg_id, article_number, content in articles:
+            reg_name, reg_category = reg_map.get(reg_id, ("Unknown", "Unknown"))
+            session.run(
+                """
+                MATCH (r:Regulation {id: $rid})
+                CREATE (a:Article {
+                    number:   $num,
+                    content:  $content,
+                    reg_name: $reg_name,
+                    category: $reg_category
+                })
+                MERGE (r)-[:HAS_ARTICLE]->(a)
+                """,
+                rid=reg_id,
+                num=article_number,
+                content=content,
+                reg_name=reg_name,
+                reg_category=reg_category,
+            )
+
+        # 3) Create full-text index on Article content.
+        session.run(
             """
-            if cypher_article.strip():
-                session.run(cypher_article, rid=reg_id, num=art_num, content=content)
-            count += 1
+            CREATE FULLTEXT INDEX article_content_idx IF NOT EXISTS
+            FOR (a:Article) ON EACH [a.content]
+            """
+        )
 
-    print(f"✅ Knowledge Graph Built! ({count} articles imported)")
+        rule_counter = 0
+
+        # TODO(student, required):
+        # - iterate through all articles
+        # - call extract_entities(article_number, reg_name, content)
+        # - skip invalid rules with empty action/result
+        # - generate unique rule_id and deduplicate logically similar rules
+        # - create Rule nodes with required properties and link via CONTAINS_RULE
+
+        # 4) Create full-text index on Rule fields.
+        session.run(
+            """
+            CREATE FULLTEXT INDEX rule_idx IF NOT EXISTS
+            FOR (r:Rule) ON EACH [r.action, r.result]
+            """
+        )
+
+        # 5) Coverage audit (provided scaffold).
+        coverage = session.run(
+            """
+            MATCH (a:Article)
+            OPTIONAL MATCH (a)-[:CONTAINS_RULE]->(r:Rule)
+            WITH a, count(r) AS rule_count
+            RETURN count(a) AS total_articles,
+                   sum(CASE WHEN rule_count > 0 THEN 1 ELSE 0 END) AS covered_articles,
+                   sum(CASE WHEN rule_count = 0 THEN 1 ELSE 0 END) AS uncovered_articles
+            """
+        ).single()
+
+        total_articles = int((coverage or {}).get("total_articles", 0) or 0)
+        covered_articles = int((coverage or {}).get("covered_articles", 0) or 0)
+        uncovered_articles = int((coverage or {}).get("uncovered_articles", 0) or 0)
+
+        print(
+            f"[Coverage] covered={covered_articles}/{total_articles}, "
+            f"uncovered={uncovered_articles}"
+        )
+
     driver.close()
     sql_conn.close()
+
 
 if __name__ == "__main__":
     build_graph()

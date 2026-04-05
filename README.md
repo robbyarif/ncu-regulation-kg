@@ -5,7 +5,7 @@ Before you begin, ensure you have the following installed:
 
 * Docker Desktop (Required to run the Neo4j database)
 
-* Google Cloud API Key (for Gemini-2.5-Flash-lite)
+* Internet access for first-time HuggingFace model download (local model will be cached)
 # ⚙️ Environment Setup
 ### 1. Database Setup (Neo4j via Docker)
 
@@ -54,20 +54,17 @@ venv\Scripts\activate
 
 `pip install -r requirements.txt`
 
-### 4. Environment Variables (.env)
-
-Rename the file `.env_template` to `.env` in the root directory and add your GOOGLE_API_KEY
-
 # 📂 File Descriptions
 
 * **source/:** Folder containing raw English PDF regulations
 * **setup_data.py:** Parses PDFs using pdfplumber and Regex, cleans the text, and stores structured data into a local SQLite database
 * **build_kg.py:** Reads from SQLite and executes Cypher queries to create nodes (Regulation, Article) and relationships (HAS_ARTICLE) in Neo4j.
 * **query_system.py:** The interactive chatbot. It retrieves full regulation context and uses the LLM to generate answers.
-* **auto_test.py:** Runs 20 benchmark questions defined in test_data.json and uses an "LLM-as-a-Judge" to score your system (Pass/Fail).
+* **auto_test.py:** Runs benchmark questions in test_data.json and uses an "LLM-as-a-Judge" to score your system (Pass/Fail).
 
 # 🚀 Execution Order
 **make sure you have already run neo4j in docker**
+**run commands in this repository root folder**
 1. `python setup_data.py`
 2. `python build_kg.py`
 3. (Not necessary)`python query_system.py`: Test your system manually to see if it answers correctly.

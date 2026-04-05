@@ -1,134 +1,140 @@
+"""Minimal KG query template for Assignment 4.
+
+Keep these APIs unchanged for auto-test:
+- generate_text(messages, max_new_tokens=220)
+- get_relevant_articles(question)
+- generate_answer(question, rule_results)
+
+Keep Rule fields aligned with build_kg output:
+rule_id, type, action, result, art_ref, reg_name
+"""
+
 import os
-import sys
-import json
-for key in ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY']:
-    if key in os.environ:
-        del os.environ[key]
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import PromptTemplate
+from typing import Any
+
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
 
+from llm_loader import load_local_llm, get_tokenizer, get_raw_pipeline
+
+
+# ========== 0) Initialization ==========
 load_dotenv()
 
-URI = "bolt://localhost:7687"
-AUTH = (os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "password"))
+URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+AUTH = (
+	os.getenv("NEO4J_USER", "neo4j"),
+	os.getenv("NEO4J_PASSWORD", "password"),
+)
+
+# Avoid local proxy settings interfering with model/Neo4j access.
+for key in ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
+	if key in os.environ:
+		del os.environ[key]
+
 
 try:
-    driver = GraphDatabase.driver(URI, auth=AUTH)
-    driver.verify_connectivity()
+	driver = GraphDatabase.driver(URI, auth=AUTH)
+	driver.verify_connectivity()
 except Exception as e:
-    print(f"⚠️ Neo4j Connection Warning: {e}")
+	print(f"⚠️ Neo4j connection warning: {e}")
+	driver = None
 
-if not os.getenv("GOOGLE_API_KEY"):
-    print("❌ Error: GOOGLE_API_KEY not found! Check your .env file.")
 
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0)
+# ========== 1) Public API (query flow order) ==========
+# Order: extract_entities -> build_typed_cypher -> get_relevant_articles -> generate_answer
 
-def get_cypher_query():
-    """
-    Constructs the Cypher query to retrieve the Knowledge Graph data.
-    
-    Strategy: "Full Context Retrieval"
-    Since our database is small (< 200 articles), we retrieve EVERYTHING.
-    This ensures 100% recall and lets the LLM do the filtering.
-    """
-    
-    # [TODO]
-    # Write a Cypher query to retrieve ALL regulations and their articles.
-    #
-    # Requirements:
-    # 1. Match the pattern: (Regulation) connected to (Article) via [:HAS_ARTICLE].
-    # 2. Return three specific fields:
-    #    - Regulation Name (e.g., r.name)
-    #    - Article Number (e.g., a.number)
-    #    - Article Content (e.g., a.content)
-    #
-    # Hint:
-    # MATCH (n:Label)-[:REL]->(m:Label) RETURN n.prop, m.prop...
-    
-    cypher = ""
-    return cypher
+def generate_text(messages: list[dict[str, str]], max_new_tokens: int = 220) -> str:
+	"""
+	Call local HF model via chat template + raw pipeline.
 
-def run_query(cypher):
-    try:
-        with driver.session() as session:
-            return [record.data() for record in session.run(cypher)]
-    except Exception as e:
-        print(f"❌ DB Error: {e}")
-        return []
+	Interface:
+	- Input:
+	  - messages: list[dict[str, str]] (chat messages with role/content)
+	  - max_new_tokens: int
+	- Output:
+	  - str (model generated text, no JSON guarantee)
+	"""
+	tok = get_tokenizer()
+	pipe = get_raw_pipeline()
+	if tok is None or pipe is None:
+		load_local_llm()
+		tok = get_tokenizer()
+		pipe = get_raw_pipeline()
+	prompt = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+	return pipe(prompt, max_new_tokens=max_new_tokens)[0]["generated_text"].strip()
 
-def generate_answer(question, context):
-    if not context:
-        return "Database is empty."
-    context_text = ""
-    for item in context:
-        reg = item.get('r.name', 'Unknown') #regulation's name
-        art = item.get('a.number', 'N/A') #article's number
-        text = item.get('a.content', '')
-        context_text += f"[{reg}] {art}: {text}\n"
 
-    context_text = context_text[:500000] 
+def extract_entities(question: str) -> dict[str, Any]:
+	"""TODO(student, required): parse question to {question_type, subject_terms, aspect}."""
+	return {
+		"question_type": "general",
+		"subject_terms": [],
+		"aspect": "general",
+	}
 
-    # [TODO: Student Task 2]
-    # Design the Instructions for the LLM.
-    # 
-    # Your prompt must:
-    #  Instruct the LLM to read the ENTIRE context to find the answer.
-    #  Instruct the LLM to cite the source (Regulation Name + Article Number).
-    #  Handle cases where the answer is not found (tell it to say "I cannot find...").
 
-    template = """
-    You are an expert NCU Regulation Assistant.
-    You have access to the FULL university regulations below.
-    Your job is to read them carefully and find the EXACT answer to the user's question.
-    
-    User Question: {q}
-    
-    --- BEGIN REGULATIONS ---
-    {c}
-    --- END REGULATIONS ---
-    
-    Instructions:
-    [Todo: Fill in your instructions here]
-    
-    Answer:
-    """
-    prompt = PromptTemplate(template=template, input_variables=["q", "c"])
-    chain = prompt | llm
-    
-    try:
-        return chain.invoke({"q": question, "c": context_text}).content
-    except Exception as e:
-        return f"LLM Error: {e}"
-    
+def build_typed_cypher(entities: dict[str, Any]) -> tuple[str, str]:
+	"""TODO(student, required): return (typed_query, broad_query) with score and required fields."""
+	cypher_typed = """
+	"""
+
+	cypher_broad = """
+	"""
+
+	return cypher_typed, cypher_broad
+
+
+def get_relevant_articles(question: str) -> list[dict[str, Any]]:
+	"""TODO(student, required): run typed+broad retrieval and return merged rule dicts."""
+	if driver is None:
+		return []
+	return []
+
+
+def generate_answer(question: str, rule_results: list[dict[str, Any]]) -> str:
+	"""TODO(student, required): generate grounded answer from retrieved rules only."""
+	return "Insufficient rule evidence to answer this question."
+
+
+def main() -> None:
+	"""Interactive CLI (provided scaffold)."""
+	if driver is None:
+		return
+
+	load_local_llm()
+
+	print("=" * 50)
+	print("🎓 NCU Regulation Assistant (Template)")
+	print("=" * 50)
+	print("💡 Try: 'What is the penalty for forgetting student ID?'")
+	print("👉 Type 'exit' to quit.\n")
+
+	while True:
+		try:
+			user_q = input("\nUser: ").strip()
+			if not user_q:
+				continue
+			if user_q.lower() in {"exit", "quit"}:
+				print("👋 Bye!")
+				break
+
+			results = get_relevant_articles(user_q)
+			answer = generate_answer(user_q, results)
+			print(f"Bot: {answer}")
+
+		except KeyboardInterrupt:
+			print("\n👋 Bye!")
+			break
+		except NotImplementedError as e:
+			print(f"⚠️ {e}")
+			break
+		except Exception as e:
+			print(f"❌ Error: {e}")
+
+	driver.close()
+
+
 if __name__ == "__main__":
-    print("="*50)
-    print("🎓 NCU Regulation Assistant")
-    print("="*50)
-    print("💡 Try asking: 'What is the penalty for cheating?' or 'Min credits for graduation?'")
-    print("👉 Type 'exit' or 'quit' to leave.\n")
+	main()
 
-    print("⏳ Loading knowledge base...", end=" ", flush=True)
-    full_context_data = run_query(get_cypher_query())
-    print(f"Done! ({len(full_context_data)} articles loaded)")
-
-    while True:
-        try:
-            user_q = input("\nUser: ").strip()
-            if not user_q: continue
-            if user_q.lower() in ['exit', 'quit']:
-                print("👋 Bye!")
-                break
-            
-            print("🤖 Thinking...")
-            answer = generate_answer(user_q, full_context_data)
-            print(f"Bot: {answer}")
-            
-        except KeyboardInterrupt:
-            print("\n👋 Bye!")
-            break
-        except Exception as e:
-            print(f"❌ Unexpected Error: {e}")
-
-    driver.close()
