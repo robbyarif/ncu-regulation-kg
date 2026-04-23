@@ -1,4 +1,4 @@
-﻿"""Minimal KG builder template for Assignment 4.
+"""Minimal KG builder template for Assignment 4.
 
 Keep this contract unchanged:
 - Graph: (Regulation)-[:HAS_ARTICLE]->(Article)-[:CONTAINS_RULE]->(Rule)
@@ -10,6 +10,7 @@ Keep this contract unchanged:
 
 import os
 import sqlite3
+import json
 from typing import Any
 
 from dotenv import load_dotenv
@@ -29,10 +30,47 @@ AUTH = (
 
 
 def extract_entities(article_number: str, reg_name: str, content: str) -> dict[str, Any]:
-    """TODO(student, required): implement LLM extraction and return {"rules": [...]}"""
-    return {
-        "rules": []
-    }
+    """LLM extraction to return {"rules": [...]} with subject, type, action, result."""
+    tok = get_tokenizer()
+    pipe = get_raw_pipeline()
+    if tok is None or pipe is None:
+        load_local_llm()
+        tok = get_tokenizer()
+        pipe = get_raw_pipeline()
+
+    system_prompt = (
+        "You are an expert legal annotator. Extract atomic rules from the provided university regulation article.\n"
+        "Each rule must have:\n"
+        "- subject: who it applies to (e.g., student, instructor)\n"
+        "- type: category (e.g., penalty, requirement, procedure, eligibility)\n"
+        "- action: the condition or behavior (e.g., 'late for more than 20 minutes')\n"
+        "- result: the consequence or requirement (e.g., 'barred from exam', '5 points deduction')\n\n"
+        "Return the output strictly as a JSON object: {\"rules\": [ {\"subject\":..., \"type\":..., \"action\":..., \"result\":...}, ... ]}"
+    )
+
+    user_content = f"Regulation: {reg_name}\nArticle No: {article_number}\nContent: {content}"
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+    prompt = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    response = pipe(prompt, max_new_tokens=512)[0]["generated_text"].strip()
+
+    # Simple JSON extraction from response
+    try:
+        # Find the first { and last }
+        start = response.find("{")
+        end = response.rfind("}") + 1
+        if start != -1 and end != -1:
+            json_str = response[start:end]
+            return json.loads(json_str)
+    except Exception as e:
+        print(f"Error parsing JSON for Article {article_number}: {e}")
+        print(f"Raw response: {response}")
+
+    return {"rules": []}
 
 
 def build_fallback_rules(article_number: str, content: str) -> list[dict[str, str]]:
@@ -106,14 +144,52 @@ def build_graph() -> None:
 
         rule_counter = 0
 
-        # TODO(student, required):
-        # - iterate through all articles
-        # - call extract_entities(article_number, reg_name, content)
-        # - skip invalid rules with empty action/result
-        # - generate unique rule_id and deduplicate logically similar rules
-        # - create Rule nodes with required properties and link via CONTAINS_RULE
+        # 4) Extraction loop
+        for reg_id, article_number, content in articles:
+            reg_name, reg_category = reg_map.get(reg_id, ("Unknown", "Unknown"))
+            print(f"[Processing] {reg_name} Article {article_number}...")
+            
+            extracted = extract_entities(article_number, reg_name, content)
+            rules = extracted.get("rules", [])
+            
+            # Fallback if LLM fails but content is not empty
+            if not rules and len(content.strip()) > 20:
+                rules = build_fallback_rules(article_number, content)
 
-        # 4) Create full-text index on Rule fields.
+            for rule in rules:
+                action = rule.get("action", "")
+                result = rule.get("result", "")
+                
+                if not action or not result:
+                    continue
+
+                rule_counter += 1
+                rule_id = f"R-{rule_counter:04d}"
+                
+                session.run(
+                    """
+                    MATCH (a:Article {number: $art_num, reg_name: $reg_name})
+                    CREATE (r:Rule {
+                        rule_id:  $rid,
+                        type:     $type,
+                        subject:  $subject,
+                        action:   $action,
+                        result:   $result,
+                        art_ref:  $art_num,
+                        reg_name: $reg_name
+                    })
+                    MERGE (a)-[:CONTAINS_RULE]->(r)
+                    """,
+                    art_num=article_number,
+                    reg_name=reg_name,
+                    rid=rule_id,
+                    type=rule.get("type", "general"),
+                    subject=rule.get("subject", "student"),
+                    action=action,
+                    result=result,
+                )
+
+        # 5) Create full-text index on Rule fields.
         session.run(
             """
             CREATE FULLTEXT INDEX rule_idx IF NOT EXISTS

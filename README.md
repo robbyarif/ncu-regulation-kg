@@ -1,74 +1,91 @@
-# 🛠️ Prerequisites
-Before you begin, ensure you have the following installed:
+# Report: NCU Regulation Knowledge Graph and Quality Assurance System
+**Name:** Robby Arifandri  
+**Student ID:** 114522602
 
-* Python 3.11 (Strict requirement) 
+---
 
-* Docker Desktop (Required to run the Neo4j database)
+## Knowledge Graph Construction Logic and Design Choices
 
-* Internet access for first-time HuggingFace model download (local model will be cached)
-# ⚙️ Environment Setup
-### 1. Database Setup (Neo4j via Docker)
+The central design principle of this project is the atomization of governance structures. Rather than treating regulations as monolithic text blocks, they are decomposed into structured, factual nodes.
 
-You must run a local Neo4j instance using Docker. Run the following command in your terminal:
+### 1. The Rule Node Strategy
+Unlike conventional Retrieval-Augmented Generation (RAG) systems that retrieve full articles, this architecture extracts and retrieves specific rules. 
+- **Article nodes** preserve the structural context (number, content).
+- **Rule nodes** capture the normative intent (subject, action, result).
+- **Design Choice:** A local language model (`Qwen2.5-3B`) is utilized to extract these triplets during the construction phase. This methodology enables property-based retrieval (e.g., querying for all nodes where the `type` attribute equals 'penalty').
 
-` docker run -d --name neo4j -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j:latest `
+### 2. Schema Diagram
+The knowledge graph adheres to the following hierarchical grounding structure:
+`(:Regulation)-[:HAS_ARTICLE]->(:Article)-[:CONTAINS_RULE]->(:Rule)`
 
-Explanation of flags:
+---
 
-* -d: Runs the container in detached mode (background).
+## Retrieval Strategy: Intent-Based Dual-Channel
 
-*  -p 7474:7474: Exposes the web interface port (Browser).
+The `query_system.py` module implements a comprehensive retrieval pipeline designed to balance precision and recall:
 
-*  -p 7687:7687: Exposes the Bolt protocol port (Python connection).
+### Channel A: Typed Intent Query
+The system initially performs intent parsing on the user's query to extract:
+- `question_type`: (e.g., fee, penalty)
+- `subject_terms`: (e.g., ['student ID'])
+- `aspect`: (e.g., 'cost')
 
-*  -e NEO4J_AUTH=...: Sets the username (neo4j) and password (password).
+Subsequently, it executes a targeted Cypher query that filters by `Rule.type` and searches for specified entities within `Rule.subject` and `Rule.action`.
 
-Verification: After running the command, check if the database is ready:
+### Channel B: Broad Semantic Fallback
+In cases where structured intent matching does not yield sufficient results, the system executes a broad full-text search across both `Rule` and `Article` content indices utilizing Neo4j's Lucene engine.
 
-1. Open your browser and go to http://localhost:7474.
+### Channel C: SQLite High-Recall Backup
+Should the knowledge graph retrieval yield sparse results (fewer than five rules), the system initiates a keyword-based retrieval from the underlying SQLite `articles` table. This redundancy ensures that the raw source text remains available for grounding, mitigating the risk of extraction failures by the language model.
 
-2. Login with user: neo4j and password: password.
+---
 
-### 2. Virtual Environment Setup
+## Evaluation and Failure Analysis
 
-It is highly recommended to use a virtual environment to manage dependencies.
+The system was evaluated utilizing an automated testing framework (`auto_test.py`, functioning as an LLM-as-a-Judge) against 20 benchmark queries.
 
-**For macOS / Linux:**
+### Automated Test Results
+
+```text
+==============================
+=== Evaluation Summary (No Metadata) ===
+Total: 20
+Passed: 13
+Failed: 7
+Accuracy: 65.0%
+==============================
 ```
-# Create virtual environment
-python -m venv venv
 
-# Activate environment
-source venv/bin/activate
-```
-**For Windows:**
-```
-# Create virtual environment
-python -m venv venv
 
-# Activate environment
-venv\Scripts\activate
-```
+### Failure Categories and Analysis
 
-### 3. Install Dependencies
+| Category | Questions | Root Cause |
+| :--- | :--- | :--- |
+| **Knowledge Gap** | Q7, Q11 | The specific rules (e.g., precise credit requirements) were absent from the extracted rule set or necessitated cross-regulation associations that were not fully captured. |
+| **Logic and Mathematical Reasoning** | Q15 | The language model encountered difficulties with cumulative arithmetic (e.g., aggregating multiple extension periods documented across disparate rules). |
+| **Grounding Failure** | Q17, Q20 | Contextual Oversight: The relevant rules were present in the retrieved context; however, the model failed to identify them within a dense block of information. |
+| **Ambiguity** | Q14 | The model accurately cited an edge-case rule but failed to prioritize the general case rule, which was ranked lower in the retrieval results. |
 
-`pip install -r requirements.txt`
+### Operational Fixes and Improvements
+- **Cypher Robustness**: Implemented a text-sanitization layer to escape special characters (e.g., `/`) in user queries, thereby preventing Lucene lexical errors.
+- **Synthesis Tuning**: Refined the generator prompt to be significantly more directive, compelling the model to conduct multiple passes over the context before defaulting to an "I don't know" response.
 
-# 📂 File Descriptions
+---
 
-* **source/:** Folder containing raw English PDF regulations
-* **setup_data.py:** Parses PDFs using pdfplumber and Regex, cleans the text, and stores structured data into a local SQLite database
-* **build_kg.py:** Reads from SQLite and executes Cypher queries to create nodes (Regulation, Article) and relationships (HAS_ARTICLE) in Neo4j.
-* **query_system.py:** The interactive chatbot. It retrieves full regulation context and uses the LLM to generate answers.
-* **auto_test.py:** Runs benchmark questions in test_data.json and uses an "LLM-as-a-Judge" to score your system (Pass/Fail).
+## Graph Visualization
 
-# 🚀 Execution Order
-**make sure you have already run neo4j in docker**
-**run commands in this repository root folder**
-1. `python setup_data.py`
-2. `python build_kg.py`
-3. (Not necessary)`python query_system.py`: Test your system manually to see if it answers correctly.
-4. `python auto_test.py`: run the benchmark test  
+![NCU KG Graph Visualization](img/knowledge-graph.png)
+*Figure 1: Visualization displaying Regulation (Blue), Article (Green), and extracted Rule nodes (Orange).*
+
+---
+
+## Getting Started
+
+1. **Initialize Neo4j Database**: `docker run -d --name neo4j -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j:latest`
+2. **Construct Knowledge Graph**: `python build_kg.py`
+3. **Execute QA System**: `python query_system.py`
+4. **Evaluate System Performance**: `python auto_test.py`
+  
 
 
 

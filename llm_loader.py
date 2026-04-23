@@ -69,6 +69,7 @@ def load_local_llm(model_id: str = MODEL_ID) -> Any:
         model=model,
         tokenizer=_tokenizer,
         max_new_tokens=MAX_NEW_TOKENS,
+        max_length=None,          # Silence max_length / max_new_tokens warning
         do_sample=False,          # deterministic (equivalent to temperature=0)
         repetition_penalty=1.1,
         return_full_text=False,   # only return the newly generated tokens
